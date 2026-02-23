@@ -36,7 +36,7 @@
     //         LED_COLOR_ID_BLUE>;
 	// };
 
-    led_strip: sk6812-spi@0 {
+    rgbw_strip: sk6812-spi@0 {
         compatible = "worldsemi,ws2812-spi";
 
         reg = <0>;
@@ -60,7 +60,7 @@
 / {
     aliases 
     {
-        led-strip = &led_strip;
+        rgbw-strip = &rgbw_strip;
     };
 };
 &spi1 {

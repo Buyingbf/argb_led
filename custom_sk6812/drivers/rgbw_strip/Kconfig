@@ -1,0 +1,33 @@
+# Top-level configuration file for LED strip drivers.
+
+# Copyright (c) 2017 Linaro Limited
+# Copyright (c) 2018 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+
+menuconfig RGBW_STRIP
+	bool "RGBW LED strip drivers"
+	help
+	  Include RGBW LED strip drivers in the system configuration.
+
+if RGBW_STRIP
+
+module = RGBW_STRIP
+module-str = RGBW strip
+source "subsys/logging/Kconfig.template.log_config"
+
+config RGBW_STRIP_INIT_PRIORITY
+	int "LED strip initialization priority"
+	default 90
+	help
+	  System initialization priority for RGBW LED strip drivers.
+
+# Hidden option. The extra byte enables efficient serialization and transmission
+# for drivers which require 4 B on wire for every 3 B of color, e.g. APA102, but
+# is not normally needed.
+config LED_STRIP_RGB_SCRATCH
+	bool
+
+rsource "Kconfig.sk6812"
+
+
+endif # RGBW_STRIP
