@@ -37,7 +37,7 @@ extern "C" {
  * Individual strip drivers may ignore lower-order bits if their
  * resolution in any channel is less than a full byte.
  */
-struct led_rgbw {
+typedef struct led_rgbw {
 #ifdef CONFIG_RGBW_STRIP_RGB_SCRATCH
 	/*
 	 * Pad/scratch space needed by some drivers. Users should
@@ -53,7 +53,7 @@ struct led_rgbw {
 	uint8_t b;
     /** White channel */
     uint8_t w;
-};
+} __packed led_rgbw;
 
 /**
  * @typedef rgbw_api_update_rgbw

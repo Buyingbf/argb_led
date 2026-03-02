@@ -14,7 +14,7 @@
  * but it seems to work on AdaFruit LED rings.
  */
 #define SPI_FREQ    4000000
-#define ZERO_FRAME  0x40 /* 01  00 0000 */
+#define ZERO_FRAME  0x40 /* 0100 0000 */
 #define ONE_FRAME   0x70 /* 0111 0000 */
 
 #endif

@@ -36,7 +36,39 @@
     //         LED_COLOR_ID_BLUE>;
 	// };
 
-    rgbw_strip: sk6812-spi@0 {
+    // rgbw_strip: ws2812-spi@0 {
+    //     compatible = "worldsemi,ws2812-spi";
+
+    //     reg = <0>;
+    //     spi-max-frequency = <SPI_FREQ>;
+
+    //     /* SK6812 */
+    //     chain-length = <72>;
+    //     spi-one-frame = <ONE_FRAME>;
+    //     spi-zero-frame = <ZERO_FRAME>;
+
+    //     /* Subpixel layout of SK6812 */
+    //     color-mapping = <LED_COLOR_ID_GREEN
+    //                      LED_COLOR_ID_RED
+    //                      LED_COLOR_ID_BLUE
+    //                      LED_COLOR_ID_WHITE>;
+    // };
+
+	status = "disabled";    // Enable SPI device
+};
+
+/ {
+    aliases 
+    {
+        rgbw-strip = &rgbw_strip;
+    };
+};
+&spi1 {
+	status = "disabled";
+};
+
+&spi3 {
+    rgbw_strip: ws2812-spi@0 {
         compatible = "worldsemi,ws2812-spi";
 
         reg = <0>;
@@ -54,19 +86,9 @@
                          LED_COLOR_ID_WHITE>;
     };
 
-	status = "okay";    // Enable SPI device
+	status = "okay";
 };
 
-/ {
-    aliases 
-    {
-        rgbw-strip = &rgbw_strip;
-    };
-};
-&spi1 {
-	status = "disabled";
-};
-
-&spi3 {
-	status = "disabled";
+&rtc0 {
+    status = "okay";
 };
