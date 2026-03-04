@@ -32,6 +32,8 @@ static struct k_work adv_work;
 
 extern struct k_msgq led_message_queue; 
 
+extern bool no_white_component;
+
 static const struct bt_le_adv_param *adv_param = BT_LE_ADV_PARAM(
 	(BT_LE_ADV_OPT_CONN |
 	 BT_LE_ADV_OPT_USE_IDENTITY), /* Connectable advertising and use identity address */
@@ -69,10 +71,10 @@ static void advertising_start(void)
 	k_work_submit(&adv_work);
 }
 
-static void set_color(const led_rgbw *new_color)
+static void set_color(const led_hsv *new_hsv)
 {
 	k_msgq_put(&led_message_queue, &(struct led_msg){
-		.new_color = *new_color,
+		.new_hsv = *new_hsv,
 		.command = SET,
 	}, K_FOREVER);
 }
@@ -80,7 +82,7 @@ static void set_color(const led_rgbw *new_color)
 static void set_brightness(const uint8_t *new_brightness)
 {
 	k_msgq_put(&led_message_queue, &(struct led_msg){
-		.new_brightness = *new_brightness,
+		.new_hsv = (&(led_hsv){.v = *new_brightness}), // Only brightness component is relevant for this message
 		.command = SET,
 	}, K_FOREVER);
 	
@@ -187,20 +189,30 @@ static void button_changed(uint32_t button_state, uint32_t has_changed)
 		if (user_button_pressed)
 		{
 			k_msgq_put(&led_message_queue, &(struct led_msg){
-				.new_color = (led_rgbw){
-					.r = sys_rand8_get(),
-					.g = sys_rand8_get(),
-					.b = sys_rand8_get(),
-					.w = sys_rand8_get(),
+				.new_hsv = (led_hsv){
+					.h = sys_rand8_get(),
+					.s = sys_rand8_get(),
+					.v = 255U,
 				},
 				.command = FADE,
+				.params = LED_PARAM_COLOR,
+				.duration = 1000
 			}, K_NO_WAIT);
-		}
-		
+		}		
 		err = bt_lbs_send_button_state(user_button_pressed);
 		if (err) {
 			LOG_ERR("Couldn't send notification. (err: %d)", err);
 		}
+	}
+
+	if (button_state & DK_BTN2_MSK) // If button state changed and button is now released, toggle white component on/off
+	{
+		no_white_component = !no_white_component; // Toggle white component on/off with second button
+		k_msgq_put(&led_message_queue, &(struct led_msg){
+			.new_hsv = ((led_hsv){.v = 128U}), // Only brightness component is relevant for this message
+			.params = LED_PARAM_BRIGHTNESS,
+			.command = SET,
+		}, K_FOREVER);
 	}
 }
 
