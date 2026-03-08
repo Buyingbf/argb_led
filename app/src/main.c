@@ -71,10 +71,10 @@ static void advertising_start(void)
 	k_work_submit(&adv_work);
 }
 
-static void set_color(const led_hsv *new_hsv)
+static void set_color_rgbw(const led_rgbw *new_color)
 {
 	k_msgq_put(&led_message_queue, &(struct led_msg){
-		.new_hsv = *new_hsv,
+		.new_rgbw = *new_color,
 		.command = SET,
 	}, K_FOREVER);
 }
@@ -82,7 +82,7 @@ static void set_color(const led_hsv *new_hsv)
 static void set_brightness(const uint8_t *new_brightness)
 {
 	k_msgq_put(&led_message_queue, &(struct led_msg){
-		.new_hsv = (&(led_hsv){.v = *new_brightness}), // Only brightness component is relevant for this message
+		.new_brightness = *new_brightness,
 		.command = SET,
 	}, K_FOREVER);
 	
@@ -174,7 +174,7 @@ struct bt_conn_cb connection_callbacks = {
 };
 
 struct my_lss_cb lss_callbacks = {
-	.color_cb = set_color,
+	.color_cb = set_color_rgbw,
 	.brightness_cb = set_brightness,
 };
 
@@ -189,10 +189,11 @@ static void button_changed(uint32_t button_state, uint32_t has_changed)
 		if (user_button_pressed)
 		{
 			k_msgq_put(&led_message_queue, &(struct led_msg){
-				.new_hsv = (led_hsv){
-					.h = sys_rand8_get(),
-					.s = sys_rand8_get(),
-					.v = 255U,
+				.new_rgbw = (led_rgbw){
+					.r = sys_rand8_get(),
+					.g = sys_rand8_get(),
+					.b = sys_rand8_get(),
+					.w = sys_rand8_get(),
 				},
 				.command = FADE,
 				.params = LED_PARAM_COLOR,
@@ -209,7 +210,7 @@ static void button_changed(uint32_t button_state, uint32_t has_changed)
 	{
 		no_white_component = !no_white_component; // Toggle white component on/off with second button
 		k_msgq_put(&led_message_queue, &(struct led_msg){
-			.new_hsv = ((led_hsv){.v = 128U}), // Only brightness component is relevant for this message
+			.new_brightness = 0x7f,
 			.params = LED_PARAM_BRIGHTNESS,
 			.command = SET,
 		}, K_FOREVER);

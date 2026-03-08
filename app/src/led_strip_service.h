@@ -31,7 +31,7 @@ extern "C" {
 #define BT_UUID_LSS_BRIGHTNESS BT_UUID_DECLARE_128(BT_UUID_LSS_BRIGHTNESS_VAL)
 
 /** @brief Callback type for when the application wants to change color. */
-typedef void (*color_cb_t)(const struct led_rgbw *color);
+typedef void (*color_cb_t)(const led_rgbw *color);
 
 /** @brief Callback type for when the application wants to change brightness. */
 typedef void (*brightness_cb_t)(const uint8_t *brightness);
@@ -65,7 +65,7 @@ int my_lss_init(struct my_lss_cb *callbacks);
  * @param brightness Brightness value (0-255) to scale the color by.
  * @return void
  */
-void brightness_scale_color(struct led_rgbw *scaled_color, struct led_rgbw *color, uint8_t brightness);
+void brightness_scale_color(led_rgbw *scaled_color, led_rgbw *color, uint8_t brightness);
 
 #ifdef __cplusplus
 }

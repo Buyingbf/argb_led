@@ -7,7 +7,7 @@ LOG_MODULE_REGISTER(led_anim_thread);
 #include <zephyr/sys/util.h>
 
 #include <rgbw_strip.h>
-#include "led_anim_thread.h"
+#include "led_anim_thread_internal.h"
 
 #define STRIP_NODE		DT_ALIAS(rgbw_strip)
 #define STRIP_NUM_PIXELS	DT_PROP(DT_ALIAS(rgbw_strip), chain_length)
@@ -17,25 +17,52 @@ LOG_MODULE_REGISTER(led_anim_thread);
 #define RGBW(_r, _g, _b, _w) { .r = (_r), .g = (_g), .b = (_b) , .w = (_w)}
 #define STEP_MS 16 // 60fps = 16.67ms
 
-static const led_rgbw preset_colors[] = {
-	RGBW(0x0f, 0x00, 0x00, 0x00), /* red */
-	RGBW(0x00, 0x0f, 0x00, 0x00), /* green */
-	RGBW(0x00, 0x00, 0x0f, 0x00), /* blue */
-    RGBW(0x0f, 0x0f, 0x0f, 0x0f), /* white */
-};
-
 static const struct device *strip = DEVICE_DT_GET(STRIP_NODE);
 static led_rgbw pixels[STRIP_NUM_PIXELS];
+static const uint16_t gamma_table[256] = {
+    0,     0,     1,     3,     7,    11,    17,    24,
+   32,    41,    52,    65,    78,    93,   110,   128,
+  148,   169,   192,   216,   242,   269,   298,   329,
+  361,   395,   431,   468,   507,   548,   591,   635,
+  681,   729,   778,   829,   882,   937,   994,  1052,
+ 1113,  1175,  1239,  1305,  1373,  1442,  1514,  1587,
+ 1662,  1739,  1818,  1899,  1982,  2067,  2154,  2243,
+ 2333,  2426,  2521,  2617,  2716,  2817,  2919,  3024,
+ 3130,  3239,  3350,  3462,  3577,  3694,  3813,  3934,
+ 4057,  4182,  4309,  4438,  4569,  4702,  4838,  4975,
+ 5115,  5257,  5401,  5546,  5695,  5845,  5997,  6152,
+ 6308,  6467,  6628,  6791,  6956,  7124,  7294,  7465,
+ 7639,  7815,  7994,  8174,  8357,  8542,  8729,  8919,
+ 9110,  9304,  9500,  9699,  9899, 10102, 10307, 10514,
+10724, 10935, 11150, 11366, 11584, 11805, 12028, 12254,
+12481, 12711, 12944, 13178, 13415, 13654, 13896, 14140,
+14386, 14634, 14885, 15138, 15393, 15651, 15911, 16174,
+16438, 16705, 16975, 17247, 17521, 17797, 18076, 18357,
+18641, 18927, 19215, 19506, 19799, 20095, 20393, 20693,
+20996, 21301, 21608, 21918, 22231, 22545, 22862, 23182,
+23504, 23828, 24155, 24484, 24816, 25150, 25487, 25826,
+26167, 26511, 26857, 27206, 27557, 27911, 28267, 28626,
+28987, 29351, 29717, 30085, 30456, 30830, 31206, 31584,
+31965, 32349, 32735, 33123, 33514, 33907, 34303, 34702,
+35103, 35506, 35912, 36321, 36732, 37145, 37561, 37980,
+38401, 38825, 39251, 39680, 40111, 40545, 40981, 41420,
+41862, 42306, 42753, 43202, 43653, 44108, 44565, 45024,
+45486, 45951, 46418, 46888, 47360, 47835, 48312, 48792,
+49275, 49760, 50248, 50738, 51232, 51727, 52225, 52726,
+53230, 53736, 54245, 54756, 55270, 55786, 56305, 56827,
+57352, 57879, 58408, 58941, 59476, 60013, 60553, 61096,
+61642, 62190, 62741, 63294, 63850, 64409, 64970, 65535,
+};
 
+// static led_hsv current_hsv;             // User-selected color in HSV
+led_rgbw base_rgb;                      // Base RGB color converted from at full brightness 
+static uint8_t master_brightness;       // Global brightness scaler, applied to final RGBW output
 
-static led_hsv current_hsv;             // Current HSV color state; basis for all calculations
-static led_rgbw base_rgb, scaled_rgbw;  // Base RGB color converted from HSV at full brightness, then scaled by current brightness level for final output
-static uint8_t brightness;
-bool no_white_component;          
-
-static led_rgbw current_color; // Current and new (scaled) RGBW colors for the LED strip; white component extracted from RGB values
-
-static uint8_t duration;
+static led_rgbw current_color;          // Current color being displayed on the strip
+static led_rgbw_16 linear_rgbw_16;      // Intermediate 16-bit RGBW values after brightness scaling
+static led_rgbw_16 gamma_rgbw_16;       // Intermediate 16-bit RGBW values after gamma correction          
+bool no_white_component;         // Flag to indicate use of white component; true: RGB only, false: RGBW with white component extracted from RGB values  
+static uint8_t duration;                // Duration for animation effects
 
 K_MSGQ_DEFINE(led_message_queue, sizeof(struct led_msg), 10, 1); // Why alignment?
 
@@ -51,46 +78,43 @@ void led_anim_thread(void *arg1, void *arg2, void *arg3)
 		LOG_ERR("LED strip device %s is not ready", strip->name);
 		return;
 	}
+
     current_color = (led_rgbw){0x3f, 0x3f, 0x3f, 0x3f};
+    master_brightness = 0xff;
     update_rgbw_strip();
 
-    struct led_msg msg;
-    struct led_rgbw new_color;
+    led_msg msg;
+    led_rgbw new_color;
     while (1)
     {
         k_msgq_get(&led_message_queue, &msg, K_FOREVER); // Wait indefinitely for a message
-        // LOG_INF("Received LED message: command=%d, new_color=(%d, %d, %d, %d), new_brightness=%d",
-        //         msg.command, msg.new_color.r, msg.new_color.g, msg.new_color.b, msg.new_color.w, msg.new_brightness);
 
         if (msg.params & LED_PARAM_BRIGHTNESS)
         {
-            LOG_INF("Updating brightness to %d", msg.new_hsv.v);
-            brightness = msg.new_hsv.v;
-            scale_brightness(&scaled_rgbw, &base_rgb, brightness);                  // Scale RGB values by current brightness; no white component
-            rgb2rgbw(&scaled_rgbw, &new_color);  
-            // if (msg.new_hsv.v == brightness)
+            /* Temporarily disabled to allow for manual refresh */
+            // if (msg.new_brightness == master_brightness)
             // {
+            //     LOG_INF("Brightness unchanged at %d, skipping update", msg.new_brightness);
             //     continue; // No change in brightness, skip
             // }
+            LOG_INF("Updating master brightness to %d", msg.new_brightness);
+            master_brightness = msg.new_brightness;
         }
+
         if (msg.params & LED_PARAM_COLOR)
         {
-            if (memcmp(&current_hsv, &msg.new_hsv, sizeof(led_hsv)) == 0)
+            if (memcmp(&base_rgb, &msg.new_rgbw, sizeof(led_rgbw)) == 0)
             {
                 continue; // No change in color, skip
             }
-
-            // LOG_INF("Updating color to (%d, %d, %d) with brightness %d", msg.new_hsv.h, msg.new_hsv.s, msg.new_hsv.v, msg.new_brightness);
-            current_hsv = msg.new_hsv;
-            brightness = msg.new_hsv.v;
-
-            hsv2rgb(&base_rgb, &(led_hsv) {current_hsv.h, current_hsv.s, 255U});    // Convert HSV to RGB with full brightness for accurate scaling later on
-            scale_brightness(&scaled_rgbw, &base_rgb, brightness);                  // Scale RGB values by current brightness; no white component
-            rgb2rgbw(&scaled_rgbw, &new_color);                                      // Convert scaled RGB to RGBW format for strip; white component extracted from RGB values
+            base_rgb = msg.new_rgbw;
         }
 
         if (msg.params & LED_PARAM_BRIGHTNESS || msg.params & LED_PARAM_COLOR)
         {
+            scale_brightness_16(&linear_rgbw_16, &base_rgb, master_brightness);
+            gamma_correct_16(&gamma_rgbw_16, &linear_rgbw_16);
+            rgb2rgbw(&linear_rgbw_16, &new_color);                                      // Convert to RGBW format, extracting white component if applicable
             switch (msg.command)
             {
                 case SET:
@@ -101,17 +125,6 @@ void led_anim_thread(void *arg1, void *arg2, void *arg3)
                     break;
             }
         }
-
-        // if (msg.params & LED_PARAM_COLOR)
-        // {
-        //     LOG_INF("Updating color to (%d, %d, %d, %d)", msg.new_color.r, msg.new_color.g, msg.new_color.b, msg.new_color.w);
-        //     new_color = msg.new_color; // WIP
-        // }
-        // if (msg.params & LED_PARAM_BRIGHTNESS)
-        // {
-        //     LOG_INF("Updating brightness to %d", msg.new_brightness);
-        //     new_brightness = msg.new_brightness; // WIP
-        // }
     }
 }
 
@@ -171,17 +184,25 @@ static void set_color_rgb(const led_rgbw *new_color)
     update_rgbw_strip();
 }
 
-static void scale_brightness(led_rgbw *scaled_color, const led_rgbw *color, const uint8_t brightness)
+static void scale_brightness_16(led_rgbw_16 *scaled_color, const led_rgbw *color, const uint8_t brightness)
 {
-    scaled_color->r = (color->r * brightness) / 255;
-    scaled_color->g = (color->g * brightness) / 255;
-    scaled_color->b = (color->b * brightness) / 255;
-    scaled_color->w = (color->w * brightness) / 255;
+    scaled_color->r_16 = (color->r * brightness);
+    scaled_color->g_16 = (color->g * brightness);
+    scaled_color->b_16 = (color->b * brightness);
+    scaled_color->w_16 = (color->w * brightness);
+}
+
+static void gamma_correct_16(led_rgbw_16 *corrected_color, const led_rgbw_16 *color)
+{
+    corrected_color->r_16 = (gamma_table[color->r_16 >> 8] * color->r_16) >> 16;
+    corrected_color->g_16 = (gamma_table[color->g_16 >> 8] * color->g_16) >> 16;
+    corrected_color->b_16 = (gamma_table[color->b_16 >> 8] * color->b_16) >> 16;
+    corrected_color->w_16 = (gamma_table[color->w_16 >> 8] * color->w_16) >> 16;
 }
 
 static void rgb2rgbw(const led_rgbw *rgb, led_rgbw *rgbw)
 {
-    if (no_white_component)
+    if (no_white_component && rgb->w == 0) // If white component is disabled and input color has no white component, just copy RGB values and set W to 0
     {
         *rgbw = *rgb; // If no white component, just copy RGB values and set W to 0
         rgbw->w = 0;
@@ -199,13 +220,6 @@ static void update_rgbw_strip(void)
 {
 	int rc;
 	memset(pixels, 0x00, sizeof(pixels));
-
-	// led_rgbw scaled_color;
-	// brightness_scale_color(&scaled_color, &color, brightness);
-
-	// for (size_t i = 0; i < 4; i++) {
-	// 	memcpy(&pixels[i], &scaled_color, sizeof(led_rgbw));
-	// }
 
 	for (size_t i = 0; i < 4; i++) {
 		memcpy(&pixels[i], &current_color, sizeof(led_rgbw));
