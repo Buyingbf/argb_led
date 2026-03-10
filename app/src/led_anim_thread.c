@@ -5,6 +5,7 @@ LOG_MODULE_REGISTER(led_anim_thread);
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/sys/util.h>
+#include <stdlib.h>
 
 #include <rgbw_strip.h>
 #include "led_anim_thread_internal.h"
@@ -15,7 +16,7 @@ LOG_MODULE_REGISTER(led_anim_thread);
 
 #define RGB(_r, _g, _b) { .r = (_r), .g = (_g), .b = (_b)}
 #define RGBW(_r, _g, _b, _w) { .r = (_r), .g = (_g), .b = (_b) , .w = (_w)}
-#define STEP_MS 16 // 60fps = 16.67ms
+#define FRAME_MS 16 // 60fps = 16.67ms
 
 static const struct device *strip = DEVICE_DT_GET(STRIP_NODE);
 static led_rgbw pixels[STRIP_NUM_PIXELS];
@@ -54,15 +55,24 @@ static const uint16_t gamma_table[256] = {
 61642, 62190, 62741, 63294, 63850, 64409, 64970, 65535,
 };
 
-// static led_hsv current_hsv;             // User-selected color in HSV
-led_rgbw base_rgb;                      // Base RGB color converted from at full brightness 
-static uint8_t master_brightness;       // Global brightness scaler, applied to final RGBW output
+static led_msg msg;
 
-static led_rgbw current_color;          // Current color being displayed on the strip
-static led_rgbw_16 linear_rgbw_16;      // Intermediate 16-bit RGBW values after brightness scaling
-static led_rgbw_16 gamma_rgbw_16;       // Intermediate 16-bit RGBW values after gamma correction          
-bool no_white_component;         // Flag to indicate use of white component; true: RGB only, false: RGBW with white component extracted from RGB values  
-static uint8_t duration;                // Duration for animation effects
+// static led_hsv current_hsv;             // User-selected color in HSV
+led_rgbw base_rgb = {0};                      // User-selected color in RGBW
+static uint8_t master_brightness = 0xff;       // Global brightness scaler, applied to final RGBW output
+
+bool no_white_component = false;         // Flag to indicate use of white component; true: RGB only, false: RGBW with white component extracted from RGB values  
+static led_state current_state;         
+static led_command current_command;
+
+static led_rgbw current_color = {0};          // Current color being displayed on the strip
+static led_rgbw_16 linear_rgbw_16 = {0};      // Intermediate 16-bit RGBW values after brightness scaling
+static led_rgbw_16 gamma_rgbw_16 = {0};       // Intermediate 16-bit RGBW values after gamma correction          
+static int64_t duration_ms = 1000;                // Duration for animation effects
+static int64_t start_time, elapsed_time;
+
+static int64_t frame_time, total_frame_time;
+static int64_t frames = 0;
 
 K_MSGQ_DEFINE(led_message_queue, sizeof(struct led_msg), 10, 1); // Why alignment?
 
@@ -78,53 +88,122 @@ void led_anim_thread(void *arg1, void *arg2, void *arg3)
 		LOG_ERR("LED strip device %s is not ready", strip->name);
 		return;
 	}
-
-    current_color = (led_rgbw){0x3f, 0x3f, 0x3f, 0x3f};
-    master_brightness = 0xff;
+    current_state = STATIC;
+    current_command = NONE;
+    current_color = (led_rgbw) RGBW(0, 0, 0, 0);
     update_rgbw_strip();
+    
 
-    led_msg msg;
-    led_rgbw new_color;
+    led_rgbw new_color, start_color;
     while (1)
     {
-        k_msgq_get(&led_message_queue, &msg, K_FOREVER); // Wait indefinitely for a message
 
-        if (msg.params & LED_PARAM_BRIGHTNESS)
+        /* Wait indefinitely for a message if static, otherwise wait for frame duration */
+        int rc = k_msgq_get(&led_message_queue, &msg, (current_state == STATIC && current_command == NONE) ? K_FOREVER : K_NO_WAIT);
+        
+        if (rc == 0)
         {
-            /* Temporarily disabled to allow for manual refresh */
-            // if (msg.new_brightness == master_brightness)
-            // {
-            //     LOG_INF("Brightness unchanged at %d, skipping update", msg.new_brightness);
-            //     continue; // No change in brightness, skip
-            // }
-            LOG_INF("Updating master brightness to %d", msg.new_brightness);
-            master_brightness = msg.new_brightness;
-        }
-
-        if (msg.params & LED_PARAM_COLOR)
-        {
-            if (memcmp(&base_rgb, &msg.new_rgbw, sizeof(led_rgbw)) == 0)
+            if (msg.command != NONE)
             {
-                continue; // No change in color, skip
+                current_command = msg.command;
             }
-            base_rgb = msg.new_rgbw;
-        }
+            else
+            {
+                LOG_WRN("Received message with no command, ignoring");
+                continue;
+            }
 
-        if (msg.params & LED_PARAM_BRIGHTNESS || msg.params & LED_PARAM_COLOR)
-        {
+            if (msg.params & LED_PARAM_BRIGHTNESS)
+            {
+                /* Temporarily disabled to allow for manual refresh */
+                // if (msg.new_brightness == master_brightness)
+                // {
+                //     LOG_INF("Brightness unchanged at %d, skipping update", msg.new_brightness);
+                //     continue; // No change in brightness, skip
+                // }
+                // LOG_INF("Updating master brightness to %d", msg.new_brightness);
+                master_brightness = msg.new_brightness;
+            }
+
+            if (msg.params & LED_PARAM_COLOR)
+            {
+                if (memcmp(&base_rgb, &msg.new_rgbw, sizeof(led_rgbw)) == 0)
+                {
+                    continue; // No change in color, skip
+                }
+                base_rgb = msg.new_rgbw;
+            }
+
+            if (msg.params & LED_PARAM_DURATION)
+            {
+                duration_ms = abs(msg.duration);
+            }
+
+            if (duration_ms <= FRAME_MS)
+            {
+                set_color_rgb(&new_color);
+                current_command = NONE;
+            }
+
             scale_brightness_16(&linear_rgbw_16, &base_rgb, master_brightness);
             gamma_correct_16(&gamma_rgbw_16, &linear_rgbw_16);
-            rgb2rgbw(&linear_rgbw_16, &new_color);                                      // Convert to RGBW format, extracting white component if applicable
-            switch (msg.command)
-            {
-                case SET:
-                    set_color_rgb(&new_color);
-                    break;
-                case FADE:
-                    fade_color_rgb(&new_color, msg.duration); // Example: fade over duration ms
-                    break;
-            }
+            // rgb2rgbw(&linear_rgbw_16, &new_color);
+            new_color.r = gamma_rgbw_16.r_16 >> 8;
+            new_color.g = gamma_rgbw_16.g_16 >> 8;
+            new_color.b = gamma_rgbw_16.b_16 >> 8;
+            new_color.w = gamma_rgbw_16.w_16 >> 8;
+
+            start_color = current_color; // Set start color for animation to current color on strip
+            start_time = k_uptime_get();
+            frame_time = k_uptime_get();
+            total_frame_time = 0;
+            frames = 0;
+
+            LOG_INF("Starting color: R=%d, G=%d, B=%d, W=%d", start_color.r, start_color.g, start_color.b, start_color.w);
+            LOG_INF("Base color: R=%d, G=%d, B=%d, W=%d", base_rgb.r, base_rgb.g, base_rgb.b, base_rgb.w);
+            LOG_INF("Corrected color: R=%d, G=%d, B=%d, W=%d, brightness: %d, duration: %lldms", new_color.r, new_color.g, new_color.b, new_color.w, master_brightness, duration_ms);
+            
         }
+
+        switch (current_command)
+        {
+            case SET:
+                set_color_rgb(&new_color);
+                current_command = NONE;
+                break;
+            case FADE:
+                frame_time = k_uptime_get();
+                elapsed_time = k_uptime_get() - start_time;
+                // k_sleep(K_MSEC(50));
+
+                if (elapsed_time >= duration_ms) {
+                    elapsed_time = duration_ms; // Cap elapsed time to duration
+                    current_command = NONE;
+                    // LOG_INF("Fade complete, final color: R=%d, G=%d, B=%d, W=%d", current_color.r, current_color.g, current_color.b, current_color.w);
+                }
+                current_color.r = start_color.r + (((int)new_color.r - (int)start_color.r) * elapsed_time) / duration_ms;
+                current_color.g = start_color.g + (((int)new_color.g - (int)start_color.g) * elapsed_time) / duration_ms;
+                current_color.b = start_color.b + (((int)new_color.b - (int)start_color.b) * elapsed_time) / duration_ms;
+                current_color.w = start_color.w + (((int)new_color.w - (int)start_color.w) * elapsed_time) / duration_ms;
+                update_rgbw_strip();
+
+                frames++;
+                total_frame_time += k_uptime_get() - frame_time;
+                // LOG_INF("Current color during fade: R=%d, G=%d, B=%d, W=%d, elapsed_time: %lldms", current_color.r, current_color.g, current_color.b, current_color.w, elapsed_time);
+                if (current_command == NONE) {
+                    LOG_INF("Fade complete, start color: R=%d, G=%d, B=%d, W=%d", start_color.r, start_color.g, start_color.b, start_color.w);
+                    LOG_INF("Fade complete, original new color: R=%d, G=%d, B=%d, W=%d", new_color.r, new_color.g, new_color.b, new_color.w);
+                    LOG_INF("Fade complete, final color: R=%d, G=%d, B=%d, W=%d", current_color.r, current_color.g, current_color.b, current_color.w);
+                    LOG_INF("Fade complete, total frames: %lld, average frame time: %lld.%lldms", frames, total_frame_time / frames, (total_frame_time % frames));
+                    current_color = new_color; // Ensure final color is set precisely at end of fade
+                    update_rgbw_strip();
+                }
+                break;
+            default:
+                break;
+        }
+
+
     }
 }
 
@@ -151,53 +230,45 @@ void hsv2rgb(led_rgbw *rgbw, const led_hsv *hsv)
 
 }
 
-static void fade_color_rgb(const led_rgbw *new_color, const uint32_t duration_ms)
-{
-	if (duration_ms <= STEP_MS) {
-		set_color_rgb(new_color);
-		return; // Duration too short for fade, set color immediately
-	}
-
-	int64_t start_time = k_uptime_get();
-	int64_t elapsed_time = 0;
-	led_rgbw start = current_color;
-	while(elapsed_time < duration_ms)
-	{
-		k_sleep(K_MSEC(STEP_MS)); // 60fps = 16.67ms
-		elapsed_time = k_uptime_get() - start_time;
-		if (elapsed_time > duration_ms) {
-			elapsed_time = duration_ms; // Cap elapsed time to duration
-		}
-		current_color.r = start.r + ((new_color->r - start.r) * elapsed_time) / duration_ms;
-		current_color.g = start.g + ((new_color->g - start.g) * elapsed_time) / duration_ms;
-		current_color.b = start.b + ((new_color->b - start.b) * elapsed_time) / duration_ms;
-		current_color.w = start.w + ((new_color->w - start.w) * elapsed_time) / duration_ms;
-        update_rgbw_strip();
-	}
-	current_color = *new_color; // Ensure final color is set precisely
-	update_rgbw_strip();
-}
-
-static void set_color_rgb(const led_rgbw *new_color)
+static inline void set_color_rgb(const led_rgbw *new_color)
 {
     memcpy(&current_color, new_color, sizeof(led_rgbw));
     update_rgbw_strip();
 }
 
-static void scale_brightness_16(led_rgbw_16 *scaled_color, const led_rgbw *color, const uint8_t brightness)
+static inline void scale_brightness_16(led_rgbw_16 *scaled_color, const led_rgbw *color, const uint8_t brightness)
 {
+    if (brightness == 255)
+    {
+        LOG_INF("Brightness at 255, skipping scaling");
+        scaled_color->r_16 = color->r << 8;
+        scaled_color->g_16 = color->g << 8;
+        scaled_color->b_16 = color->b << 8;
+        scaled_color->w_16 = color->w << 8;
+        return; // No scaling needed, just shift to 16-bit range
+    }
+    else if (brightness == 0)
+    {
+        LOG_INF("Brightness at 0, setting all channels to 0");
+        scaled_color->r_16 = 0;
+        scaled_color->g_16 = 0;
+        scaled_color->b_16 = 0;
+        scaled_color->w_16 = 0;
+        return; // All channels off
+    }
+
     scaled_color->r_16 = (color->r * brightness);
     scaled_color->g_16 = (color->g * brightness);
     scaled_color->b_16 = (color->b * brightness);
     scaled_color->w_16 = (color->w * brightness);
 }
 
-static void gamma_correct_16(led_rgbw_16 *corrected_color, const led_rgbw_16 *color)
+static inline void gamma_correct_16(led_rgbw_16 *corrected_color, const led_rgbw_16 *color)
 {
-    corrected_color->r_16 = (gamma_table[color->r_16 >> 8] * color->r_16) >> 16;
-    corrected_color->g_16 = (gamma_table[color->g_16 >> 8] * color->g_16) >> 16;
-    corrected_color->b_16 = (gamma_table[color->b_16 >> 8] * color->b_16) >> 16;
-    corrected_color->w_16 = (gamma_table[color->w_16 >> 8] * color->w_16) >> 16;
+    corrected_color->r_16 = (gamma_table[color->r_16 >> 8]);
+    corrected_color->g_16 = (gamma_table[color->g_16 >> 8]);
+    corrected_color->b_16 = (gamma_table[color->b_16 >> 8]);
+    corrected_color->w_16 = (gamma_table[color->w_16 >> 8]);
 }
 
 static void rgb2rgbw(const led_rgbw *rgb, led_rgbw *rgbw)
@@ -216,7 +287,7 @@ static void rgb2rgbw(const led_rgbw *rgb, led_rgbw *rgbw)
     rgbw->b = rgb->b - min_component;
 }
 
-static void update_rgbw_strip(void)
+static inline void update_rgbw_strip(void)
 {
 	int rc;
 	memset(pixels, 0x00, sizeof(pixels));

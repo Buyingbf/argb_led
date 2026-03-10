@@ -15,8 +15,10 @@ LOG_MODULE_REGISTER(main);
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/bluetooth/conn.h>	// BLE connections
 #include <zephyr/random/random.h>
+#include <zephyr/debug/coredump.h>
 
 #include <bluetooth/services/lbs.h> // LED button service
+
 
 #include <dk_buttons_and_leds.h>
 #include "led_strip_service.h"
@@ -196,7 +198,7 @@ static void button_changed(uint32_t button_state, uint32_t has_changed)
 					.w = sys_rand8_get(),
 				},
 				.command = FADE,
-				.params = LED_PARAM_COLOR,
+				.params = LED_PARAM_COLOR | LED_PARAM_DURATION,
 				.duration = 1000
 			}, K_NO_WAIT);
 		}		
