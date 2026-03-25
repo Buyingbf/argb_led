@@ -20,8 +20,56 @@
 LOG_MODULE_REGISTER(led_strip_service);
 
 static struct led_rgbw color;
+static uint32_t duration;
 static uint8_t brightness;
 static struct my_lss_cb lss_cb;
+
+static ssize_t fade_color(struct bt_conn *conn,
+					     const struct bt_gatt_attr *attr,
+					     const void *buf,
+                         uint16_t len,
+					     uint16_t offset,
+                         uint8_t flags)
+{
+	LOG_DBG("Attribute write color, handle: %u, conn: %p", attr->handle, (void *)conn);
+
+	if (len != 8U) {
+		LOG_ERR("Write color: Incorrect data length; receieed length: %u", len);
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+	}
+
+	if (offset != 0) {
+		LOG_ERR("Write color: Incorrect data offset, received offset: %u", offset);
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+	}
+
+	// struct led_rgbw color;
+	// uint8_t 
+	if (lss_cb.fade_cb) {
+		const uint8_t* data = (const uint8_t*)buf;
+		duration = (
+					((uint32_t)data[3] << 24) |
+					((uint32_t)data[2] << 16) |
+					((uint32_t)data[1] << 8) |
+					((uint32_t)data[0]));
+		color.r = data[4];
+        color.g = data[5];
+        color.b = data[6];
+        color.w = data[7];
+
+		LOG_INF("Received color values: R=%u, G=%u, B=%u, W=%u, duration: %ums",
+			color.r,
+			color.g,
+			color.b,
+			color.w,
+        duration);
+
+		lss_cb.fade_cb(&color, duration);
+	}
+
+
+	return len;
+}
 
 static ssize_t write_color(struct bt_conn *conn,
 					     const struct bt_gatt_attr *attr,
@@ -31,12 +79,6 @@ static ssize_t write_color(struct bt_conn *conn,
                          uint8_t flags)
 {
 	LOG_DBG("Attribute write color, handle: %u, conn: %p", attr->handle, (void *)conn);
-    LOG_INF("Received color values: R=%u, G=%u, B=%u, W=%u",
-        ((struct led_rgbw*)buf)->r,
-        ((struct led_rgbw*)buf)->g,
-        ((struct led_rgbw*)buf)->b,
-        ((struct led_rgbw*)buf)->w);
-
 
 	if (len != 4U) {
 		LOG_ERR("Write color: Incorrect data length");
@@ -51,11 +93,16 @@ static ssize_t write_color(struct bt_conn *conn,
 	if (lss_cb.color_cb) {
 		// Read the received value
 		struct led_rgbw color;
-        color.r = (uint8_t) ((*(uint32_t*)(buf)) >> 24) & 0xFF;
-        color.g = (uint8_t) ((*(uint32_t*)(buf)) >> 16) & 0xFF;
-        color.b = (uint8_t) ((*(uint32_t*)(buf)) >> 8)  & 0xFF;
-        color.w = (uint8_t) ((*(uint32_t*)(buf)) >> 0)  & 0xFF;
-
+		const uint8_t* data = (const uint8_t*)buf;
+		color.r = data[0];
+		color.g = data[1];
+		color.b = data[2];
+		color.w = data[3];
+		LOG_INF("Received color values: R=%u, G=%u, B=%u, W=%u",
+			color.r,
+			color.g,
+			color.b,
+			color.w);
         lss_cb.color_cb(&color);
 	}
 
@@ -92,6 +139,12 @@ static ssize_t write_brightness(struct bt_conn *conn,
 }
 
 BT_GATT_SERVICE_DEFINE(led_strip_service, BT_GATT_PRIMARY_SERVICE(BT_UUID_LSS),
+    BT_GATT_CHARACTERISTIC( BT_UUID_LSS_FADE,
+                            BT_GATT_CHRC_WRITE,
+                            BT_GATT_PERM_WRITE,
+                            NULL,
+                            fade_color,
+                            &color),
     BT_GATT_CHARACTERISTIC( BT_UUID_LSS_COLOR,
                             BT_GATT_CHRC_WRITE,
                             BT_GATT_PERM_WRITE,
@@ -110,16 +163,9 @@ BT_GATT_SERVICE_DEFINE(led_strip_service, BT_GATT_PRIMARY_SERVICE(BT_UUID_LSS),
 int my_lss_init(struct my_lss_cb *callbacks)
 {
 	if (callbacks) {
+		lss_cb.fade_cb = callbacks->fade_cb;
 		lss_cb.color_cb = callbacks->color_cb;
 		lss_cb.brightness_cb = callbacks->brightness_cb;
 	}
 	return 0;
-}
-
-void brightness_scale_color(struct led_rgbw *scaled_color, struct led_rgbw *color, uint8_t brightness)
-{
-    scaled_color->r = (color->r * brightness) >> 8;
-    scaled_color->g = (color->g * brightness) >> 8;
-    scaled_color->b = (color->b * brightness) >> 8;
-    scaled_color->w = (color->w * brightness) >> 8;
 }

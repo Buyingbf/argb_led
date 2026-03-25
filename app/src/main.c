@@ -35,6 +35,9 @@ static struct k_work adv_work;
 extern struct k_msgq led_message_queue; 
 
 extern bool no_white_component;
+extern bool dither_enabled;
+
+static int index;
 
 static const struct bt_le_adv_param *adv_param = BT_LE_ADV_PARAM(
 	(BT_LE_ADV_OPT_CONN |
@@ -73,20 +76,33 @@ static void advertising_start(void)
 	k_work_submit(&adv_work);
 }
 
+static void fade_color(const led_rgbw *new_color, const uint32_t duration)
+{
+	k_msgq_put(&led_message_queue, &(struct led_msg){
+		.new_rgbw = *new_color,
+		.params = LED_PARAM_COLOR | LED_PARAM_DURATION,
+		.command = FADE,
+		.duration = duration,
+	}, K_NO_WAIT);
+}
+
 static void set_color_rgbw(const led_rgbw *new_color)
 {
 	k_msgq_put(&led_message_queue, &(struct led_msg){
 		.new_rgbw = *new_color,
+		.params = LED_PARAM_COLOR,
 		.command = SET,
-	}, K_FOREVER);
+		// .duration = 10000,
+	}, K_NO_WAIT);
 }
 
 static void set_brightness(const uint8_t *new_brightness)
 {
 	k_msgq_put(&led_message_queue, &(struct led_msg){
 		.new_brightness = *new_brightness,
+		.params = LED_PARAM_BRIGHTNESS,
 		.command = SET,
-	}, K_FOREVER);
+	}, K_NO_WAIT);
 	
 }
 
@@ -176,6 +192,7 @@ struct bt_conn_cb connection_callbacks = {
 };
 
 struct my_lss_cb lss_callbacks = {
+	.fade_cb = fade_color,
 	.color_cb = set_color_rgbw,
 	.brightness_cb = set_brightness,
 };
@@ -210,12 +227,61 @@ static void button_changed(uint32_t button_state, uint32_t has_changed)
 
 	if (button_state & DK_BTN2_MSK) // If button state changed and button is now released, toggle white component on/off
 	{
-		no_white_component = !no_white_component; // Toggle white component on/off with second button
+		// no_white_component = !no_white_component; // Toggle white component on/off with second button
+		dither_enabled = !dither_enabled; // Toggle dithering on/off with second button
+		LOG_INF("Dithering %s", (dither_enabled ? "enabled" : "disabled"));
+		// k_msgq_put(&led_message_queue, &(struct led_msg){
+		// 	.new_brightness = 0x7f,
+		// 	.params = LED_PARAM_BRIGHTNESS,
+		// 	.command = SET,
+		// }, K_FOREVER);
+	}
+
+	if (button_state & DK_BTN3_MSK) // If button state changed and button is now released, toggle white component on/off
+	{
+		// switch (index)
+		// {
+		// 	case 0:
+		// 		set_color_rgbw(&(led_rgbw){.r = 0xff, .g = 0x00, .b = 0x00, .w = 0x00});
+		// 		break;
+		// 	case 1:
+		// 		set_color_rgbw(&(led_rgbw){.r = 0x00, .g = 0xff, .b = 0x00, .w = 0x00});
+		// 		break;
+		// 	case 2:
+		// 		set_color_rgbw(&(led_rgbw){.r = 0x00, .g = 0x00, .b = 0xff, .w = 0x00});
+		// 		break;
+		// 	case 3:
+		// 		set_color_rgbw(&(led_rgbw){.r = 0x00, .g = 0x00, .b = 0x00, .w = 0xff});
+		// 		break;
+		// 	default:
+		// 		break;
+		// }
+		// index = (index + 1) % 4;
 		k_msgq_put(&led_message_queue, &(struct led_msg){
-			.new_brightness = 0x7f,
-			.params = LED_PARAM_BRIGHTNESS,
-			.command = SET,
-		}, K_FOREVER);
+				.new_rgbw = (led_rgbw){
+					.r = 0x00,
+					.g = 0x00,
+					.b = 0x00,
+					.w = 0x00,
+				},
+				.command = SET,
+				.params = LED_PARAM_COLOR,
+		}, K_NO_WAIT);
+
+		k_sleep(K_MSEC(1000));
+
+		k_msgq_put(&led_message_queue, &(struct led_msg){
+			.new_rgbw = (led_rgbw){
+				.r = 0x19,
+				.g = 0x19,
+				.b = 0x19,
+				.w = 0x19,
+			},
+			.command = FADE,
+			.params = LED_PARAM_COLOR | LED_PARAM_DURATION,
+			.duration = 10000
+		}, K_NO_WAIT);
+
 	}
 }
 

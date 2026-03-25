@@ -75,7 +75,7 @@ static inline void ws2812_reset_delay(uint16_t delay)
 	k_usleep(delay);
 }
 
-static int ws2812_strip_update_rgbw(const struct device *dev,
+static int ws2812_strip_set_pixels_rgbw(const struct device *dev,
 				   struct led_rgbw *pixels,
 				   size_t num_pixels)
 {
@@ -104,7 +104,6 @@ static int ws2812_strip_update_rgbw(const struct device *dev,
 			uint8_t pixel;
 
 			switch (cfg->color_mapping[j]) {
-			/* White channel is not supported by LED strip API. */
 			case LED_COLOR_ID_WHITE:
 				pixel = pixels[i].w;
 				break;
@@ -170,7 +169,7 @@ static int ws2812_spi_init(const struct device *dev)
 }
 
 static DEVICE_API(rgbw_strip, ws2812_spi_api) = {
-	.update_rgbw = ws2812_strip_update_rgbw,
+	.update_rgbw = ws2812_strip_set_pixels_rgbw,
 	.length = ws2812_strip_length,
 };
 

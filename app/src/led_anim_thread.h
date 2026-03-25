@@ -37,7 +37,7 @@ typedef struct led_msg
     uint8_t params;
     led_command command;
     uint8_t new_brightness;
-    int64_t duration;
+    uint32_t duration;
 
     union {
         led_hsv new_hsv;
