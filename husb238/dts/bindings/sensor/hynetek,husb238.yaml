@@ -1,0 +1,5 @@
+description: HUSB238 USB Type-C Power Delivery Sink Controller
+
+compatible: "hynetek,husb238"
+
+include: [i2c-device.yaml]
