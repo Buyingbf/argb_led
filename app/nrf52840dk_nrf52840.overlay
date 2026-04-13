@@ -92,3 +92,53 @@
 &rtc0 {
     status = "okay";
 };
+
+&i2c0 {
+    status = "okay";
+    compatible = "nordic,nrf-twim";
+
+    pinctrl-0 = <&i2c0_default>;
+    pinctrl-1 = <&i2c0_sleep>;
+    pinctrl-names = "default", "sleep";
+
+    husb238: husb238@8 {
+        compatible = "hynetek,husb238";
+        status = "okay";
+        reg = <0x8>;
+    };
+
+    clock-frequency = <I2C_BITRATE_STANDARD>;
+};
+
+&pinctrl {
+	/omit-if-no-ref/ i2c0_default: i2c0_default {
+
+        group2 {
+            psels = <NRF_PSEL(TWIM_SCL, 0, 27)>;
+            bias-pull-up;
+            nordic,invert;
+        };
+
+        group1 {
+            psels = <NRF_PSEL(TWIM_SDA, 0, 26)>;
+            nordic,invert;
+            bias-pull-up;
+        };
+	};
+
+	/omit-if-no-ref/ i2c0_sleep: i2c0_sleep {
+		group1  {
+			psels = <NRF_PSEL(TWIM_SCL, 0, 27)>;
+			bias-pull-up;
+            nordic,invert;
+			low-power-enable;
+		};
+
+		group2 {
+            psels = <NRF_PSEL(TWIM_SDA, 0, 26)>;
+            bias-pull-up;
+            nordic,invert;
+			low-power-enable;
+        };
+	};
+};

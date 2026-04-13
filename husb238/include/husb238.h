@@ -2,6 +2,7 @@
 #define HUSB238_H
 
 #include <zephyr/device.h>
+#include <zephyr/drivers/i2c.h>
 
 /* I2C Registers */
 #define HUSB238_REG_STATUS0     0x00
@@ -14,6 +15,8 @@
 #define HUSB238_REG_SRC_PDO_20V 0x07
 #define SRC_PDO                 0x08
 #define GO_COMMAND              0x09
+
+#define CHECK_SRC_DETECT_BIT(pdo) ((pdo) & 0x80)
 
 typedef uint8_t husb238_pd_src_cap;
 
@@ -47,19 +50,38 @@ typedef enum husb238_pd_src_current {
     HUSB238_CURRENT_5_0A,
 } husb238_pd_src_current;
 
+static inline uint8_t PDO_VOLTAGE(uint8_t pd_src_cap) {
+    return (uint8_t) ((pd_src_cap >> 4) & 0x0F);
+}
+
+static inline uint8_t PDO_CURRENT(uint8_t pd_src_cap) {
+    return (uint8_t) (pd_src_cap & 0x0F);
+}
+
 /**
  * @brief Reads the current PD contract (voltage and current) from the HUSB238.
  * @param dev Pointer to the device structure for the HUSB238 instance.
  * @param pd_src_cap Pointer to a variable where the raw PD source capability byte from STATUS0 will be stored.
  * @return 0 on success, or a negative error code from the I2C read operation.
  */
-int husb238_get_pd_contract(const struct device *dev, husb238_pd_src_cap pd_src_cap);
+int husb238_get_pd_contract(const struct i2c_dt_spec *spec, husb238_pd_src_cap *pd_src_cap);
 
-int husb238_request_pdo(const struct device *dev,
+/**
+ * @brief Prints current PD contract from HUSB238 to logger module.
+ * @param pd_src_cap The raw PD source contract byte read from STATUS0, containing the voltage and current information.
+ */
+void husb238_print_pd_contract(husb238_pd_src_cap pd_src_cap);
+
+int husb238_request_pdo(const struct i2c_dt_spec *spec,
                         husb238_pd_src_voltage voltage);
-int husb238_reset(const struct device *dev);
+int husb238_reset(const struct i2c_dt_spec *spec);
 
-int husb238_attach_status(const struct device *dev, bool *attached);
+int husb238_attach_status(const struct i2c_dt_spec *spec, bool *attached);
+
+/**
+ * 
+ */
+int husb238_init(const struct device *dev);
 
 /**
  * @brief Reads the source capabilities (PDOs) from the HUSB238 and fills the provided array with the raw PDO values.
@@ -70,7 +92,7 @@ int husb238_attach_status(const struct device *dev, bool *attached);
  * @param len The length of the src_pdos array. Must be at least 6
  * @return 0 on success, -EINVAL if the length is not 6, or a negative error code from the I2C read operations.
  */
-int husb238_get_src_capabilities(const struct device *dev, uint8_t *src_pdos, const size_t len);
+int husb238_get_src_capabilities(const struct i2c_dt_spec *spec, uint8_t *src_pdos, const size_t len);
 
 /**
  * @brief Prints the source capabilities (PDOs) in a human-readable format to the log.

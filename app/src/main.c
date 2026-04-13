@@ -6,9 +6,11 @@
 LOG_MODULE_REGISTER(main);
 
 #include <rgbw_strip.h>				// RGBW strip driver
+#include <husb238.h>                
 // #include <zephyr/drivers/led_strip.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/spi.h>
+#include <zephyr/drivers/i2c.h>
 #include <zephyr/sys/util.h>
 
 #include <zephyr/bluetooth/bluetooth.h>
@@ -29,6 +31,8 @@ LOG_MODULE_REGISTER(main);
 
 #define DELAY_TIME K_MSEC(1000)
 
+static const struct i2c_dt_spec husb238_i2c = I2C_DT_SPEC_GET(DT_NODELABEL(husb238));
+
 struct bt_conn *my_conn = NULL;
 static struct k_work adv_work;
 
@@ -37,7 +41,7 @@ extern struct k_msgq led_message_queue;
 extern bool no_white_component;
 extern bool dither_enabled;
 
-static int index;
+// static int index;
 
 static const struct bt_le_adv_param *adv_param = BT_LE_ADV_PARAM(
 	(BT_LE_ADV_OPT_CONN |
@@ -103,7 +107,6 @@ static void set_brightness(const uint8_t *new_brightness)
 		.params = LED_PARAM_BRIGHTNESS,
 		.command = SET,
 	}, K_NO_WAIT);
-	
 }
 
 static void update_phy(struct bt_conn *conn)
@@ -225,16 +228,19 @@ static void button_changed(uint32_t button_state, uint32_t has_changed)
 		}
 	}
 
-	if (button_state & DK_BTN2_MSK) // If button state changed and button is now released, toggle white component on/off
+	if (button_state & DK_BTN2_MSK)
 	{
 		// no_white_component = !no_white_component; // Toggle white component on/off with second button
-		dither_enabled = !dither_enabled; // Toggle dithering on/off with second button
-		LOG_INF("Dithering %s", (dither_enabled ? "enabled" : "disabled"));
+		// dither_enabled = !dither_enabled; // Toggle dithering on/off with second button
+		// LOG_INF("Dithering %s", (dither_enabled ? "enabled" : "disabled"));
 		// k_msgq_put(&led_message_queue, &(struct led_msg){
 		// 	.new_brightness = 0x7f,
 		// 	.params = LED_PARAM_BRIGHTNESS,
 		// 	.command = SET,
 		// }, K_FOREVER);
+		// static uint8_t src_pdos[6];
+		// husb238_get_src_capabilities(&husb238_i2c, src_pdos, 6);
+		// husb238_print_src_capabilities(src_pdos, 6);
 	}
 
 	if (button_state & DK_BTN3_MSK) // If button state changed and button is now released, toggle white component on/off
@@ -298,7 +304,7 @@ static int init_button(void)
 
 int main()
 {
-	int rc;
+	// int rc;
 	int err;
 
 	////
@@ -340,6 +346,17 @@ int main()
 		LOG_ERR("Failed to initialize LSS (err %d)", err);
 	}
 
+	// husb238_init(husb238_i2c);
+	if (!device_is_ready(husb238_i2c.bus))
+	{
+		LOG_ERR("I2C bus %s is not ready!\n\r",husb238_i2c.bus->name);
+		return -1;
+	}
+	else
+	{
+		LOG_INF("I2C bus %s ready\n\r", husb238_i2c.bus->name);
+	}
+
 	/* Assign advertising start to a work unit*/
 	k_work_init(&adv_work, adv_work_handler); // Init work structure prior to submitting work
 	advertising_start();
@@ -358,13 +375,53 @@ int main()
 	// };
 	// update_rgbw_strip();
 
-
+	uint8_t src_pdos[6];
+	husb238_pd_src_cap pd_src_cap = {0};
+	int ret;
+	husb238_pd_src_voltage pdo_req = HUSB238_VOLTAGE_5V;
 	while (1) {
-		dk_set_led(DK_LED1, 1);
-		k_sleep(DELAY_TIME);
-		dk_set_led(DK_LED1, 0);
-		k_sleep(DELAY_TIME);
-		
+		// dk_set_led(DK_LED1, 1);
+		// k_sleep(DELAY_TIME);
+		// dk_set_led(DK_LED1, 0);
+		// k_sleep(DELAY_TIME);
+		ret = husb238_request_pdo(&husb238_i2c, pdo_req);
+		if (ret < 0)
+		{
+			LOG_ERR("Error requesting PDO");
+			k_sleep(K_MSEC(1000));
+			continue;
+		}
+
+		ret = husb238_get_src_capabilities(&husb238_i2c, src_pdos, 6);
+		// ret = husb238_get_pd_contract(&husb238_i2c, &pd_src_cap);
+		if (ret < 0)
+		{
+			LOG_ERR("Error getting source capability");
+			k_sleep(K_MSEC(1000));
+			continue;
+		}
+		else
+
+		ret = husb238_get_pd_contract(&husb238_i2c, &pd_src_cap);
+		if (ret < 0)
+		{
+			LOG_ERR("Error getting PD contract");
+			k_sleep(K_MSEC(1000));
+			continue;
+		}
+
+		ret = husb238_print_src_capabilities(src_pdos, 6);
+		if (ret < 0)
+		{
+			LOG_ERR("Error printing source capability");
+			k_sleep(K_MSEC(1000));
+			continue;
+		}
+
+		husb238_print_pd_contract(pd_src_cap);
+		pdo_req++;
+		if (pdo_req > HUSB238_VOLTAGE_20V) pdo_req = HUSB238_VOLTAGE_5V;
+		k_sleep(K_MSEC(2000));
 	}
 
     return 0;
