@@ -361,22 +361,8 @@ int main()
 	k_work_init(&adv_work, adv_work_handler); // Init work structure prior to submitting work
 	advertising_start();
 
-	// k_work_init(&led_work, led_work_handler);
-	// LOG_INF("Displaying pattern on strip");
-
-	// color_index = 0;
-	// cursor = 0;
-	// brightness = 0x3f;
-	// color = (led_rgbw) {
-	// 	.r = 0x00,
-	// 	.g = 0x00,
-	// 	.b = 0x00,
-	// 	.w = 0xff
-	// };
-	// update_rgbw_strip();
-
 	uint8_t src_pdos[6];
-	husb238_pd_src_cap pd_src_cap = {0};
+	husb238_status0 pd_src_cap = {0};
 	int ret;
 	husb238_pd_src_voltage pdo_req = HUSB238_VOLTAGE_5V;
 	while (1) {
@@ -392,15 +378,16 @@ int main()
 			continue;
 		}
 
-		ret = husb238_get_src_capabilities(&husb238_i2c, src_pdos, 6);
-		// ret = husb238_get_pd_contract(&husb238_i2c, &pd_src_cap);
-		if (ret < 0)
-		{
-			LOG_ERR("Error getting source capability");
-			k_sleep(K_MSEC(1000));
-			continue;
-		}
-		else
+		k_sleep(K_MSEC(500)); // Wait for the PD contract to be established before requesting capabilities and contract details
+
+		// ret = husb238_get_src_capabilities(&husb238_i2c, src_pdos, 6);
+		// // ret = husb238_get_pd_contract(&husb238_i2c, &pd_src_cap);
+		// if (ret < 0)
+		// {
+		// 	LOG_ERR("Error getting source capability");
+		// 	k_sleep(K_MSEC(1000));
+		// 	continue;
+		// }
 
 		ret = husb238_get_pd_contract(&husb238_i2c, &pd_src_cap);
 		if (ret < 0)
@@ -410,17 +397,17 @@ int main()
 			continue;
 		}
 
-		ret = husb238_print_src_capabilities(src_pdos, 6);
-		if (ret < 0)
-		{
-			LOG_ERR("Error printing source capability");
-			k_sleep(K_MSEC(1000));
-			continue;
-		}
+		// ret = husb238_print_src_capabilities(src_pdos, 6);
+		// if (ret < 0)
+		// {
+		// 	LOG_ERR("Error printing source capability");
+		// 	k_sleep(K_MSEC(1000));
+		// 	continue;
+		// }
 
 		husb238_print_pd_contract(pd_src_cap);
-		pdo_req++;
-		if (pdo_req > HUSB238_VOLTAGE_20V) pdo_req = HUSB238_VOLTAGE_5V;
+		// pdo_req++;
+		// if (pdo_req > HUSB238_VOLTAGE_20V) pdo_req = HUSB238_VOLTAGE_5V;
 		k_sleep(K_MSEC(2000));
 	}
 

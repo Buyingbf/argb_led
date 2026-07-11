@@ -399,7 +399,7 @@ static void update_rgbw_strip()
     //         memcpy(&pixels[i], &current_color, sizeof(led_rgbw));
     //     }
 	// }
-    for (size_t i = 0; i < 4; i++)
+    for (size_t i = 0; i < STRIP_NUM_PIXELS; i++)
     {
         memcpy(&pixels[i], &dithered_color, sizeof(led_rgbw));
     }    

@@ -1,6 +1,6 @@
 #define DT_DRV_COMPAT hynetek_husb238
 
-#define LOG_LEVEL LOG_LEVEL_INF // this was set too low and wasn't allowing LOG_INF to print probably
+#define LOG_LEVEL LOG_LEVEL_INF
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(husb238);
 
@@ -24,7 +24,7 @@ struct husb238_config {
     struct i2c_dt_spec i2c;  /* pulls address + bus from DTS automatically */
 };
 
-int husb238_get_pd_contract(const struct i2c_dt_spec *spec, husb238_pd_src_cap *pd_src_cap)
+int husb238_get_pd_contract(const struct i2c_dt_spec *spec, husb238_status0 *pd_src_cap)
 {
     int reg = {HUSB238_REG_STATUS0};
     int ret = i2c_write_read_dt(spec, &reg, 1, pd_src_cap, 1);
@@ -33,9 +33,9 @@ int husb238_get_pd_contract(const struct i2c_dt_spec *spec, husb238_pd_src_cap *
     return 0;
 }
 
-void husb238_print_pd_contract(husb238_pd_src_cap pd_src_cap)
+void husb238_print_pd_contract(husb238_status0 pd_src_cap)
 {
-    switch (PDO_VOLTAGE(pd_src_cap))
+    switch (husb238_status0_voltage(pd_src_cap))
     {
         case HUSB238_VOLTAGE_UNATTACHED:
             LOG_ERR("No PD contract established");
@@ -46,14 +46,44 @@ void husb238_print_pd_contract(husb238_pd_src_cap pd_src_cap)
         case HUSB238_VOLTAGE_15V:
         case HUSB238_VOLTAGE_18V:
         case HUSB238_VOLTAGE_20V:
-            LOG_INF("PD voltage: %sV", voltage_strings[PDO_VOLTAGE(pd_src_cap)-1]);
+            LOG_INF("PD voltage: %sV", voltage_strings[husb238_status0_voltage(pd_src_cap)-1]);
             break;
         default:
             LOG_ERR("Unknown value");
             return;
     }
 
-    LOG_INF("PD current: %sA", current_strings[PDO_CURRENT(pd_src_cap)]);
+    LOG_INF("PD current: %sA", current_strings[husb238_current(pd_src_cap)]);
+}
+
+int husb238_get_pd_response(const struct i2c_dt_spec *spec, enum pd_response *pd_response)
+{
+    uint8_t status1;
+    int ret = i2c_reg_read_byte_dt(spec, HUSB238_REG_STATUS1, &status1);
+    if (ret < 0) return ret;
+    *pd_response = (enum pd_response) ((status1 >> 3) & 0b111);
+    switch(*pd_response)
+    {       
+        case NO_RESPONSE:
+            LOG_ERR("No response from device");
+            return -EIO;
+        case SUCCESS:
+            LOG_INF("Get Source Capabilities command successful");
+            return 0;
+            break;
+        case INVALID_CMD:
+            LOG_ERR("Invalid command or argument");
+            return -EINVAL;
+        case CMD_UNSUPPORTED:
+            LOG_ERR("Command unsupported");
+            return -ENOTSUP;
+        case TRANSACT_FAILED:
+            LOG_ERR("Transaction fail. No GoodCRC is received after sending.");
+            return -EIO;
+        default:
+            LOG_ERR("Unknown response from device");
+            return -EIO;
+    }
 }
 
 int husb238_request_pdo(const struct i2c_dt_spec *spec,
@@ -72,29 +102,60 @@ int husb238_request_pdo(const struct i2c_dt_spec *spec,
     if (ret < 0) return ret;
 
     // Send PDO set request to source
-    ret = i2c_reg_write_byte_dt(spec, GO_COMMAND, 0b00001);
+    ret = i2c_reg_write_byte_dt(spec, GO_COMMAND, REQUEST_PDO);
+    if (ret < 0) return ret;
+
+    // Get PD response from STATUS1
+    uint8_t status1;
+    ret = i2c_reg_read_byte_dt(spec, HUSB238_REG_STATUS1, &status1);
+    if (ret < 0) return ret;
+    enum pd_response pd_response = (enum pd_response) ((status1 >> 3) & 0b111);
+
+    switch(pd_response)
+    {       
+        case NO_RESPONSE:
+            LOG_ERR("No response from device");
+            return -EIO;
+        case SUCCESS:
+            LOG_INF("PDO request successful");
+            break;
+        case INVALID_CMD:
+            LOG_ERR("Invalid command or argument");
+            return -EINVAL;
+        case CMD_UNSUPPORTED:
+            LOG_ERR("Command unsupported");
+            return -ENOTSUP;
+        case TRANSACT_FAILED:
+            LOG_ERR("Transaction fail. No GoodCRC is received after sending.");
+            return -EIO;
+        default:
+            LOG_ERR("Unknown response from device");
+            return -EIO;
+    }
+    return 0;
+}
+
+int husb238_reset(const struct i2c_dt_spec *spec)
+{
+    int ret = i2c_reg_write_byte_dt(spec, GO_COMMAND, HARD_RESET);
     if (ret < 0) return ret;
 
     return 0;
 }
 
 int husb238_get_src_capabilities(const struct i2c_dt_spec *spec, uint8_t *src_pdos, const size_t len) {
-    // const struct husb238_config *cfg = dev->config;
     int ret;
     // Six PDOs (5V, 9V, 12V, 15V, 18V, 20V)
     if (len != 6) return -EINVAL;   
      
     // Send "Get Source Capabilities" command
-    ret = i2c_reg_write_byte_dt(spec, GO_COMMAND, 0b00100);
+    ret = i2c_reg_write_byte_dt(spec, GO_COMMAND, GET_SRC_CAP);
     if (ret < 0) return ret;
 
-    k_sleep(K_MSEC(100)); // Wait for the device to process the command and update the PDO registers
+    // Get status1 response to check if source detected and command was successful
+    enum pd_response pd_response;
+    ret = husb238_get_pd_response(spec, &pd_response);
 
-
-    // for (size_t i = 0; i < 6; i++) {
-    //     ret = i2c_reg_read_byte_dt(spec, HUSB238_REG_SRC_PDO_5V + i, &src_pdos[i]);
-    //     if (ret < 0) return ret;
-    // }
     ret = i2c_burst_read_dt(spec, HUSB238_REG_SRC_PDO_5V, src_pdos, 6);
     if (ret < 0) return ret;
 
@@ -103,10 +164,7 @@ int husb238_get_src_capabilities(const struct i2c_dt_spec *spec, uint8_t *src_pd
 
 int husb238_print_src_capabilities(const uint8_t *src_pdos, const size_t len) {
     // Expecting 6 PDOs
-    if (len != 6)
-    {
-        return -EINVAL;
-    }
+    if (len != 6) return -EINVAL;
 
     for (size_t i = 0; i < len; i++) {
         if (!CHECK_SRC_DETECT_BIT(src_pdos[i]))
@@ -116,7 +174,7 @@ int husb238_print_src_capabilities(const uint8_t *src_pdos, const size_t len) {
         }
         else 
         {
-            LOG_INF("%sV, Max current=%sA", voltage_strings[i], current_strings[PDO_CURRENT(src_pdos[i])]);
+            LOG_INF("%sV, Max current=%sA", voltage_strings[i], current_strings[husb238_current(src_pdos[i])]);
         }
     }
     return 0;
@@ -125,7 +183,7 @@ int husb238_print_src_capabilities(const uint8_t *src_pdos, const size_t len) {
 int husb238_init(const struct device *dev) {
     const struct husb238_config *cfg = dev->config;
     if (!i2c_is_ready_dt(&cfg->i2c)) {
-        LOG_ERR("HUSB238 device is not ready");
+        LOG_ERR("I2C device %s is not ready", cfg->i2c.bus->name);
         return -ENODEV;
     }
     else

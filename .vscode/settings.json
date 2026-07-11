@@ -1,5 +1,6 @@
 {
     "nrf-connect.applications": [
-        "${workspaceFolder}\\app"
+        "${workspaceFolder}\\app",
+        "${workspaceFolder}\\husb238_test"
     ]
 }
