@@ -19,6 +19,7 @@ LOG_MODULE_REGISTER(led_anim_thread);
 #define CAN_DITHER(channel) (rgbw_16_int(##channel##) < DITHER_THRESHOLD && current_state == DITHERING && dither_enabled)
 
 #define FRAME_MS 16 // 60fps = 16.67ms
+#define MAX_DURATION 30000 // Maximum duration for fade animation; 30 seconds
 #define DITHER_THRESHOLD 30 // Color value threshold where dithering is applied
 
 static const struct device *strip = DEVICE_DT_GET(STRIP_NODE);
@@ -134,8 +135,14 @@ void led_anim_thread(void *arg1, void *arg2, void *arg3)
                     {
                         if (msg.duration <= FRAME_MS)
                         {
+                            LOG_WRN("Requested fade duration %ums is less than frame duration %ums, setting to 0 (instantaneous)", msg.duration, FRAME_MS);
                             duration_ms = 0;
                             current_command = SET;
+                        }
+                        else if (msg.duration > MAX_DURATION)
+                        {
+                            duration_ms = MAX_DURATION;
+                            LOG_WRN("Requested fade duration %ums exceeds maximum of %ums, capping to maximum", msg.duration, MAX_DURATION);
                         }
                         else
                         {

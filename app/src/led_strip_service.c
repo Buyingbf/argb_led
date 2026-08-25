@@ -48,10 +48,10 @@ static ssize_t fade_color(struct bt_conn *conn,
 	if (lss_cb.fade_cb) {
 		const uint8_t* data = (const uint8_t*)buf;
 		duration = (
-					((uint32_t)data[3] << 24) |
-					((uint32_t)data[2] << 16) |
-					((uint32_t)data[1] << 8) |
-					((uint32_t)data[0]));
+					((uint32_t)data[0] << 24) |
+					((uint32_t)data[1] << 16) |
+					((uint32_t)data[2] << 8) |
+					((uint32_t)data[3]));
 		color.r = data[4];
         color.g = data[5];
         color.b = data[6];
