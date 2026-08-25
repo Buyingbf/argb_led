@@ -19,7 +19,7 @@ LOG_MODULE_REGISTER(led_anim_thread);
 #define CAN_DITHER(channel) (rgbw_16_int(##channel##) < DITHER_THRESHOLD && current_state == DITHERING && dither_enabled)
 
 #define FRAME_MS 16 // 60fps = 16.67ms
-#define DITHER_THRESHOLD 30 // Threshold below which dithering is applied
+#define DITHER_THRESHOLD 30 // Color value threshold where dithering is applied
 
 static const struct device *strip = DEVICE_DT_GET(STRIP_NODE);
 
@@ -59,18 +59,16 @@ static const uint16_t gamma_table[256] = {
 };
 
 // static led_hsv current_hsv;             // User-selected color in HSV
-led_rgbw base_rgb = {0};                      // User-selected color in RGBW
+led_rgbw base_rgbw = {0};                      // User-selected color in RGBW
 static uint8_t master_brightness = 0xff;       // Global brightness scaler, applied to final RGBW output
 
 bool dither_enabled = true;                 // Flag to enable/disable dithering globally; true: dithering enabled, false: dithering disabled (all colors treated as above threshold)
 bool no_white_component = false;         // Flag to indicate use of white component; true: RGB only, false: RGBW with white component extracted from RGB values  
-static led_state current_state;         
+static dither_state current_state;         
 static led_command current_command;
 
 // static led_rgbw current_color;          // Current color being displayed on the strip
-static led_rgbw_16 pre_dithered_color_16;
-
-static led_rgbw new_color, new_color_frac;
+static led_rgbw_16 base_rgbw_16; // Base color scaled by master brightness and gamma corrected, pre-dithered for dithering if enabled
 
 static int64_t start_time, elapsed_time;
 
@@ -101,7 +99,7 @@ void led_anim_thread(void *arg1, void *arg2, void *arg3)
         .params = LED_PARAM_COLOR,
     }, K_FOREVER);
 
-    led_rgbw_16 start_color_16;
+    led_rgbw_16 start_color_16 = {0};
     led_rgbw_16 linear_rgbw_16, gamma_rgbw_16;
     led_msg msg; 
     uint32_t duration_ms = 0;
@@ -114,7 +112,7 @@ void led_anim_thread(void *arg1, void *arg2, void *arg3)
         // int rc = k_msgq_get(&led_message_queue, &msg, K_NO_WAIT);
         
         if (rc == 0)
-        {
+        {   
             if (msg.command != NONE)
             {
                 current_command = msg.command;
@@ -125,45 +123,57 @@ void led_anim_thread(void *arg1, void *arg2, void *arg3)
                 continue;
             }
 
-            if (msg.params & LED_PARAM_BRIGHTNESS)
+            switch(current_command)
             {
-                /* Temporarily disabled to allow for manual refresh */
-                // if (msg.new_brightness == master_brightness)
-                // {
-                //     LOG_INF("Brightness unchanged at %d, skipping update", msg.new_brightness);
-                //     continue; // No change in brightness, skip
-                // }
-                // LOG_INF("Updating master brightness to %d", msg.new_brightness);
-                master_brightness = msg.new_brightness;
+                case NONE:
+                    LOG_INF("Received message with no command, ignoring");
+                    continue;
+
+                case FADE:
+                    if (msg.params & LED_PARAM_DURATION)
+                    {
+                        if (msg.duration <= FRAME_MS)
+                        {
+                            duration_ms = 0;
+                            current_command = SET;
+                        }
+                        else
+                        {
+                            duration_ms = msg.duration;
+                        }
+                    }
+                    // Fade falls through to SET to update color and brightness values
+                case SET:
+                    if (msg.params & LED_PARAM_BRIGHTNESS)
+                    {
+                        /* Temporarily disabled to allow for manual refresh */
+                        // if (msg.new_brightness == master_brightness)
+                        // {
+                        //     LOG_INF("Brightness unchanged at %d, skipping update", msg.new_brightness);
+                        //     continue; // No change in brightness, skip
+                        // }
+                        // LOG_INF("Updating master brightness to %d", msg.new_brightness);
+                        master_brightness = msg.new_brightness;
+                    }
+
+                    if (msg.params & LED_PARAM_COLOR)
+                    {
+                        if (memcmp(&base_rgbw, &msg.new_rgbw, sizeof(led_rgbw)) == 0)
+                        {
+                            continue; // No change in color, skip
+                        }
+                        base_rgbw = msg.new_rgbw;
+                    }
+                    break;                   
             }
 
-            if (msg.params & LED_PARAM_COLOR)
-            {
-                if (memcmp(&base_rgb, &msg.new_rgbw, sizeof(led_rgbw)) == 0)
-                {
-                    continue; // No change in color, skip
-                }
-                base_rgb = msg.new_rgbw;
-            }
 
-            if (msg.params & LED_PARAM_DURATION)
-            {
-                // duration_ms = abs(msg.duration);
-                duration_ms = msg.duration;
-            }
-
-            if (duration_ms <= FRAME_MS)
-            {
-                current_command = SET;
-            }
-
-            scale_brightness_16(&linear_rgbw_16, &base_rgb, master_brightness);
+            scale_brightness_16(&linear_rgbw_16, &base_rgbw, master_brightness);
             gamma_correct_16(&gamma_rgbw_16, &linear_rgbw_16);
             // rgb2rgbw(&linear_rgbw_16, &new_color);
 
-            start_color_16 = pre_dithered_color_16; // Set start color for animation to current color on strip
+            start_color_16 = base_rgbw_16; // Set start color for animation to current color on strip
             start_time = k_uptime_get();
-            frame_time = k_uptime_get();
             total_frame_time = 0;
             frames = 0;
 
@@ -172,7 +182,7 @@ void led_anim_thread(void *arg1, void *arg2, void *arg3)
                     rgbw_16_int(start_color_16.g_16), rgbw_16_frac(start_color_16.g_16),
                     rgbw_16_int(start_color_16.b_16), rgbw_16_frac(start_color_16.b_16),
                     rgbw_16_int(start_color_16.w_16), rgbw_16_frac(start_color_16.w_16));
-            LOG_INF("Base color: R=%d, G=%d, B=%d, W=%d", base_rgb.r, base_rgb.g, base_rgb.b, base_rgb.w);
+            LOG_INF("Base color: R=%d, G=%d, B=%d, W=%d", base_rgbw.r, base_rgbw.g, base_rgbw.b, base_rgbw.w);
             LOG_INF("Corrected color: R=%d.%02d, G=%d.%02d, B=%d.%02d, W=%d.%02d, brightness: %d, duration: %ums",
                     rgbw_16_int(gamma_rgbw_16.r_16), rgbw_16_frac(gamma_rgbw_16.r_16),
                     rgbw_16_int(gamma_rgbw_16.g_16), rgbw_16_frac(gamma_rgbw_16.g_16),
@@ -182,10 +192,11 @@ void led_anim_thread(void *arg1, void *arg2, void *arg3)
 
             if (current_command == FADE)
             {
-                LOG_INF("Starting fade animation, duration: %lldms", duration_ms);
+                LOG_INF("Starting fade animation, duration: %ums", duration_ms);
             }
 
         }
+
 
         if ((rgbw_16_int(gamma_rgbw_16.r_16) <= DITHER_THRESHOLD || rgbw_16_int(gamma_rgbw_16.g_16) <= DITHER_THRESHOLD ||
              rgbw_16_int(gamma_rgbw_16.b_16) <= DITHER_THRESHOLD || rgbw_16_int(gamma_rgbw_16.w_16) <= DITHER_THRESHOLD) 
@@ -203,7 +214,7 @@ void led_anim_thread(void *arg1, void *arg2, void *arg3)
         switch (current_command)
         {
             case SET:
-                memcpy(&pre_dithered_color_16, &gamma_rgbw_16, sizeof(led_rgbw_16));
+                memcpy(&base_rgbw_16, &gamma_rgbw_16, sizeof(led_rgbw_16));
                 current_command = NONE;
                 break;
             case FADE:
@@ -213,7 +224,7 @@ void led_anim_thread(void *arg1, void *arg2, void *arg3)
                 if (elapsed_time >= duration_ms)
                 {
                     elapsed_time = duration_ms; // Cap elapsed time to duration
-                    pre_dithered_color_16 = gamma_rgbw_16; // Ensure final color is set at end of fade
+                    base_rgbw_16 = gamma_rgbw_16; // Ensure final color is set at end of fade
                     current_command = NONE;
                     LOG_INF("Fade complete, duration: %lldms", elapsed_time);
                     // LOG_INF("Fade complete, start color: R=%d, G=%d, B=%d, W=%d", start_color.r, start_color.g, start_color.b, start_color.w);
@@ -226,10 +237,10 @@ void led_anim_thread(void *arg1, void *arg2, void *arg3)
                 {
                     LOG_INF("Fading... elapsed time: %lldms", elapsed_time);
                 }
-                pre_dithered_color_16.r_16 = start_color_16.r_16 + (((int)gamma_rgbw_16.r_16 - (int)start_color_16.r_16) * elapsed_time) / (int64_t)duration_ms;
-                pre_dithered_color_16.g_16 = start_color_16.g_16 + (((int)gamma_rgbw_16.g_16 - (int)start_color_16.g_16) * elapsed_time) / (int64_t)duration_ms;
-                pre_dithered_color_16.b_16 = start_color_16.b_16 + (((int)gamma_rgbw_16.b_16 - (int)start_color_16.b_16) * elapsed_time) / (int64_t)duration_ms;
-                pre_dithered_color_16.w_16 = start_color_16.w_16 + (((int)gamma_rgbw_16.w_16 - (int)start_color_16.w_16) * elapsed_time) / (int64_t)duration_ms;
+                base_rgbw_16.r_16 = start_color_16.r_16 + (((int)gamma_rgbw_16.r_16 - (int)start_color_16.r_16) * elapsed_time) / (int64_t)duration_ms;
+                base_rgbw_16.g_16 = start_color_16.g_16 + (((int)gamma_rgbw_16.g_16 - (int)start_color_16.g_16) * elapsed_time) / (int64_t)duration_ms;
+                base_rgbw_16.b_16 = start_color_16.b_16 + (((int)gamma_rgbw_16.b_16 - (int)start_color_16.b_16) * elapsed_time) / (int64_t)duration_ms;
+                base_rgbw_16.w_16 = start_color_16.w_16 + (((int)gamma_rgbw_16.w_16 - (int)start_color_16.w_16) * elapsed_time) / (int64_t)duration_ms;
 
                 // current_color.r = start_color.r + (((int)new_color.r - (int)start_color.r) * elapsed_time) / duration_ms;
                 // current_color.g = start_color.g + (((int)new_color.g - (int)start_color.g) * elapsed_time) / duration_ms;
@@ -339,44 +350,45 @@ static void update_rgbw_strip()
 	int rc;
 	// memset(pixels, 0x00, sizeof(pixels));
 
-    if (rgbw_16_int(pre_dithered_color_16.r_16) < DITHER_THRESHOLD && current_state == DITHERING && dither_enabled)
+    // Need notes on this math
+    if (rgbw_16_int(base_rgbw_16.r_16) < DITHER_THRESHOLD && current_state == DITHERING && dither_enabled)
     {
-        dithered_color.r = rgbw_16_int(pre_dithered_color_16.r_16) +
-                           ((dither_accum_r += rgbw_16_frac(pre_dithered_color_16.r_16)) < rgbw_16_frac(pre_dithered_color_16.r_16));
+        dithered_color.r = rgbw_16_int(base_rgbw_16.r_16) +
+                           ((dither_accum_r += rgbw_16_frac(base_rgbw_16.r_16)) < rgbw_16_frac(base_rgbw_16.r_16));
     }
     else
     {
-        dithered_color.r = rgbw_16_int(pre_dithered_color_16.r_16);
+        dithered_color.r = rgbw_16_int(base_rgbw_16.r_16);
     }
 
-    if (rgbw_16_int(pre_dithered_color_16.g_16) < DITHER_THRESHOLD && current_state == DITHERING && dither_enabled)
+    if (rgbw_16_int(base_rgbw_16.g_16) < DITHER_THRESHOLD && current_state == DITHERING && dither_enabled)
     {
-        dithered_color.g = rgbw_16_int(pre_dithered_color_16.g_16) +
-                            ((dither_accum_g += rgbw_16_frac(pre_dithered_color_16.g_16)) < rgbw_16_frac(pre_dithered_color_16.g_16));
+        dithered_color.g = rgbw_16_int(base_rgbw_16.g_16) +
+                            ((dither_accum_g += rgbw_16_frac(base_rgbw_16.g_16)) < rgbw_16_frac(base_rgbw_16.g_16));
     }
     else
     {
-        dithered_color.g = rgbw_16_int(pre_dithered_color_16.g_16);
+        dithered_color.g = rgbw_16_int(base_rgbw_16.g_16);
     }
 
-    if (rgbw_16_int(pre_dithered_color_16.b_16) < DITHER_THRESHOLD && current_state == DITHERING && dither_enabled)
+    if (rgbw_16_int(base_rgbw_16.b_16) < DITHER_THRESHOLD && current_state == DITHERING && dither_enabled)
     {
-        dithered_color.b = rgbw_16_int(pre_dithered_color_16.b_16) +
-                            ((dither_accum_b += rgbw_16_frac(pre_dithered_color_16.b_16)) < rgbw_16_frac(pre_dithered_color_16.b_16));
+        dithered_color.b = rgbw_16_int(base_rgbw_16.b_16) +
+                            ((dither_accum_b += rgbw_16_frac(base_rgbw_16.b_16)) < rgbw_16_frac(base_rgbw_16.b_16));
     }
     else
     {
-        dithered_color.b = rgbw_16_int(pre_dithered_color_16.b_16);
+        dithered_color.b = rgbw_16_int(base_rgbw_16.b_16);
     }
 
-    if (rgbw_16_int(pre_dithered_color_16.w_16) < DITHER_THRESHOLD && current_state == DITHERING && dither_enabled)
+    if (rgbw_16_int(base_rgbw_16.w_16) < DITHER_THRESHOLD && current_state == DITHERING && dither_enabled)
     {
-        dithered_color.w = rgbw_16_int(pre_dithered_color_16.w_16) +
-                            ((dither_accum_w += rgbw_16_frac(pre_dithered_color_16.w_16)) < rgbw_16_frac(pre_dithered_color_16.w_16));
+        dithered_color.w = rgbw_16_int(base_rgbw_16.w_16) +
+                            ((dither_accum_w += rgbw_16_frac(base_rgbw_16.w_16)) < rgbw_16_frac(base_rgbw_16.w_16));
     }
     else
     {
-        dithered_color.w = rgbw_16_int(pre_dithered_color_16.w_16);
+        dithered_color.w = rgbw_16_int(base_rgbw_16.w_16);
     }
 
     // if (current_state == DITHERING && dither_enabled)

@@ -8,11 +8,11 @@
 
 extern bool dither_enabled;
 
-typedef enum led_state
+typedef enum dither_state
 {
     STATIC,
     DITHERING,
-} led_state;
+} dither_state;
 
 typedef struct led_rgbw_16 {
     uint16_t r_16;
@@ -22,15 +22,15 @@ typedef struct led_rgbw_16 {
 } led_rgbw_16;
 
 /**
- * @brief Scales an RGBW color's brightness by a specified factor
- * @param scaled_color Pointer to dest scaled 16-bit color structure
- * @param color Pointer to src color structure
- * @param brightness Brightness level to scale to; [0-255] range 
+ * @brief Scales an 8-bit RGBW color base color by given brightness level; stores result in intermediary 16-bit color structure
+ * @param scaled_color Pointer to 16-bit scaled color structure
+ * @param color Pointer to 8-bit base color structure
+ * @param brightness Brightness scale; [0-255] range 
  */
 static inline void scale_brightness_16(led_rgbw_16 *scaled_color, const led_rgbw *color, const uint8_t brightness);
 
 /**
- * @brief Applies gamma correction to a 16-bitRGBW color
+ * @brief Applies gamma correction to a 16-bit RGBW color
  * @param corrected_color Pointer to dest corrected color structure
  * @param color Pointer to src color structure
  */
@@ -56,6 +56,7 @@ static void rgb2rgbw(const led_rgbw *rgb, led_rgbw *rgbw);
  * @brief Updates the RGBW strip with the current color and brightness values
  */
 static void update_rgbw_strip(void);
+
 
 static inline uint8_t rgbw_16_int(const uint16_t rgbw_16)
 {
