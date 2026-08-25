@@ -104,7 +104,7 @@ void led_anim_thread(void *arg1, void *arg2, void *arg3)
     led_rgbw_16 start_color_16;
     led_rgbw_16 linear_rgbw_16, gamma_rgbw_16;
     led_msg msg; 
-    uint32_t duration_ms;
+    uint32_t duration_ms = 0;
    
     while (1)
     {

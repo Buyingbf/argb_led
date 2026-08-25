@@ -1,0 +1,65 @@
+#include <zephyr/dt-bindings/led/led.h>
+#include "nrf_bindings.h"
+
+&spi2 {
+	status = "okay";    // Enable SPI device
+	compatible = "nordic,nrf-spim"; // Use SPIM driver for EasyDMA
+
+	rgbw_strip: ws2812-spi@0 {
+		compatible = "worldsemi,ws2812-spi";
+
+		reg = <0>;
+		spi-max-frequency = <SPI_FREQ>;
+
+		/* SK6812 */
+		chain-length = <72>;
+		spi-one-frame = <ONE_FRAME>;
+		spi-zero-frame = <ZERO_FRAME>;
+
+		/* Subpixel layout of SK6812 */
+		color-mapping = <LED_COLOR_ID_GREEN
+				 LED_COLOR_ID_RED
+				 LED_COLOR_ID_BLUE
+				 LED_COLOR_ID_WHITE>;
+	};
+};
+
+
+/ {
+	aliases {
+		rgbw-strip = &rgbw_strip;
+	};
+};
+
+&rtc0 {
+	status = "okay";
+};
+
+&i2c1 {
+	status = "okay";
+	compatible = "nordic,nrf-twim";
+
+	husb238: husb238@8 {
+		compatible = "hynetek,husb238";
+		status = "okay";
+		reg = <0x8>;
+	};
+
+	clock-frequency = <I2C_BITRATE_STANDARD>;
+};
+
+&qspi {
+	status = "disabled";
+};
+
+&ieee802154 {
+	status = "disabled";
+};
+
+&reg0 {
+	status = "disabled";
+};
+
+&pwm0 {
+	status = "disabled";
+};
